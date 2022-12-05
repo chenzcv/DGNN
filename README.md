@@ -17,3 +17,17 @@ python train_tbatch.py --use_memory --prefix tgn-attn --sample_type uniform --sk
 D2:
 python train_tbatch.py --use_memory --prefix tgn-attn --sample_type uniform --skip 16 --id 1
 ```
+
+Run the training and average the parameters of M1 and M2 for every iteration
+
+```
+python train_sample.py --use_memory --prefix tgn-attn --sample_type uniform --skip 16
+```
+
+Divide the dataset into m t-batch, for each epoch, randomly sampled k t-batch (k<m)
+
+```
+python train_tbatch.py --use_memory --prefix tgn-attn --sample_type t-batch --skip 4 --id 0
+```
+
+
