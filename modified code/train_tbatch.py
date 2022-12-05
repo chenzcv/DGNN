@@ -65,6 +65,7 @@ parser.add_argument('--dyrep', action='store_true',
 parser.add_argument('--skip', type=int, default=1, help='sample the training dataset')
 parser.add_argument('--random_sample', action='store_true', help='random sample the training dataset')
 parser.add_argument('--id', type=int, default=0, help='no. of experiment')
+parser.add_argument('--sample_type', type=str, default=None, help='sample type:[uniform, tbatch]')
 
 
 try:
@@ -91,9 +92,11 @@ MEMORY_DIM = args.memory_dim
 
 Path("./saved_models/").mkdir(parents=True, exist_ok=True)
 Path("./saved_checkpoints/").mkdir(parents=True, exist_ok=True)
-MODEL_SAVE_PATH = f'./saved_models/{args.prefix}-{args.data}-sample{args.skip}-tbatch.pth'
+MODEL_SAVE_PATH = f'./saved_models/{args.data}-{args.prefix}-sample{args.skip}-{args.sample_type}-{args.id}-memory.pth' if args.use_memory \
+    else f'./saved_models/{args.data}-{args.prefix}-sample{args.skip}-{args.sample_type}-{args.id}.pth'
 get_checkpoint_path = lambda \
-    epoch: f'./saved_checkpoints/{args.prefix}-{args.data}-sample{args.skip}-tbatch-{epoch}.pth'
+    epoch: f'./saved_checkpoints/{args.data}-{args.prefix}-sample{args.skip}-{args.sample_type}-{args.id}-memory-epoch{epoch}.pth' if args.use_memory \
+    else f'./saved_checkpoints/{args.data}-{args.prefix}-sample{args.skip}-{args.sample_type}-{args.id}-epoch{epoch}.pth'
 
 ### set up logger
 logging.basicConfig(level=logging.INFO)
@@ -114,7 +117,8 @@ logger.info(args)
 ### Extract data for training, validation and testing
 node_features, edge_features, full_data, train_data, val_data, test_data, new_node_val_data, \
 new_node_test_data = get_data(DATA,
-                              different_new_nodes_between_val_and_test=args.different_new_nodes, randomize_features=args.randomize_features, sample=args.skip, random_sample=args.random_sample, exp_id=args.id)
+                              different_new_nodes_between_val_and_test=args.different_new_nodes, randomize_features=args.randomize_features,
+                              sample=args.skip, random_sample=args.random_sample, exp_id=args.id, sample_type=args.sample_type)
 
 # Initialize training neighbor finder to retrieve temporal graph
 train_ngh_finder = get_neighbor_finder(train_data, args.uniform)
@@ -143,8 +147,10 @@ mean_time_shift_src, std_time_shift_src, mean_time_shift_dst, std_time_shift_dst
   compute_time_statistics(full_data.sources, full_data.destinations, full_data.timestamps)
 
 for i in range(1):
-  results_path = "results/{}_sample{}-tbatch/result.pkl".format(args.prefix, args.skip)
-  parent_path = "results/{}_sample{}-tbatch/".format(args.prefix, args.skip)
+  results_path = "results/{}-{}_sample{}-{}-{}-memory/result.pkl".format(args.data, args.prefix, args.skip, args.sample_type, args.id) if args.use_memory \
+      else "results/{}-{}_sample{}-{}-{}/result.pkl".format(args.data, args.prefix, args.skip, args.sample_type, args.id)
+  parent_path = "results/{}-{}_sample{}-{}-{}-memory/".format(args.data, args.prefix, args.skip, args.sample_type, args.id) if args.use_memory \
+      else "results/{}-{}_sample{}-{}-{}/".format(args.data, args.prefix, args.skip, args.sample_type, args.id)
 
   Path(parent_path).mkdir(parents=True, exist_ok=True)
 

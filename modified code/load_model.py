@@ -1,12 +1,10 @@
 import torch
 import copy
 def load_model(model1,model2):
-    model1=model1.state_dict()
-    model2=model2.state_dict()
     model_final = copy.deepcopy(model1)
     for ((key1, value1), (key2, value2)) in zip(model1.items(), model2.items()):
         model_final[key1] = (value1 + value2) / 2
-        # print(key2,value2)
+
 
 
     # checkpoint1 = './saved_models/tgn-attn-wikipedia-randomFalse-sample4-1.pth'

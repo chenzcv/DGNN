@@ -12,6 +12,7 @@ from evaluation.evaluation import eval_edge_prediction
 from model.tgn import TGN
 from utils.utils import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder
 from utils.data_processing import get_data, compute_time_statistics
+import json
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -64,6 +65,8 @@ parser.add_argument('--dyrep', action='store_true',
                     help='Whether to run the dyrep model')
 parser.add_argument('--skip', type=int, default=1, help='sample the training dataset')
 parser.add_argument('--random_sample', action='store_true', help='random sample the training dataset')
+parser.add_argument('--id', type=int, default=0, help='no. of experiment')
+parser.add_argument('--sample_type', type=str, default=None, help='sample type:[uniform, tbatch]')
 
 
 try:
@@ -90,9 +93,11 @@ MEMORY_DIM = args.memory_dim
 
 Path("./saved_models/").mkdir(parents=True, exist_ok=True)
 Path("./saved_checkpoints/").mkdir(parents=True, exist_ok=True)
-MODEL_SAVE_PATH = f'./saved_models/{args.prefix}-{args.data}-random{args.random_sample}-sample{args.skip}.pth'
+MODEL_SAVE_PATH = f'./saved_models/{args.data}-{args.prefix}-sample{args.skip}-{args.id}.pth' if args.skip!=1 \
+    else f'./saved_models/{args.data}-{args.prefix}.pth'
 get_checkpoint_path = lambda \
-    epoch: f'./saved_checkpoints/{args.prefix}-{args.data}-random{args.random_sample}-sample{args.skip}-{epoch}.pth'
+    epoch: f'./saved_checkpoints/{args.data}-{args.prefix}-sample{args.skip}-{epoch}-{args.id}.pth' if args.skip!=1 \
+    else f'./saved_checkpoints/{args.data}-{args.prefix}-{epoch}.pth'
 
 ### set up logger
 logging.basicConfig(level=logging.INFO)
@@ -113,7 +118,8 @@ logger.info(args)
 ### Extract data for training, validation and testing
 node_features, edge_features, full_data, train_data, val_data, test_data, new_node_val_data, \
 new_node_test_data = get_data(DATA,
-                              different_new_nodes_between_val_and_test=args.different_new_nodes, randomize_features=args.randomize_features, sample=args.skip, random_sample=args.random_sample)
+                              different_new_nodes_between_val_and_test=args.different_new_nodes, randomize_features=args.randomize_features,
+                              sample=args.skip, random_sample=args.random_sample, exp_id=args.id, sample_type=args.sample_type)
 
 # Initialize training neighbor finder to retrieve temporal graph
 train_ngh_finder = get_neighbor_finder(train_data, args.uniform)
@@ -141,24 +147,15 @@ device = torch.device(device_string)
 mean_time_shift_src, std_time_shift_src, mean_time_shift_dst, std_time_shift_dst = \
   compute_time_statistics(full_data.sources, full_data.destinations, full_data.timestamps)
 
-for i in range(args.n_runs):
-  results_path = "results/{}_{}_ramdon_sample{}/result_{}.pkl".format(args.prefix, args.random_sample, args.skip, i)
-  parent_path = "results/{}_{}_ramdon_sample{}/".format(args.prefix, args.random_sample, args.skip)
-  # results_path = "results/{}_bs_{}/result_{}.pkl".format(args.prefix, args.bs, i)
-  # parent_path = "results/{}_bs_{}/".format(args.prefix, args.bs)
-  # results_path = "results/{}_{}/result_{}.pkl".format(args.prefix, args.data, i)
-  # parent_path = "results/{}_{}/".format(args.prefix, args.data)
-  Path(parent_path).mkdir(parents=True, exist_ok=True)
-  # Path("{}_{}_ramdon_sample{}/").mkdir(parents=True, exist_ok=True)
+val_pred_wrong_list={}
+test_pred_wrong_list={'1':[],'2':[],'3':[],'4':[],'5':[]}
+nn_val_pred_wrong_list={}
+nn_test_pred_wrong_list={'1':[],'2':[],'3':[],'4':[],'5':[]}
 
-  # _, _, _, train_data, _, _, _, _ = get_data(DATA,
-  #                               different_new_nodes_between_val_and_test=args.different_new_nodes,
-  #                               randomize_features=args.randomize_features, sample=args.skip,
-  #                               random_sample=args.random_sample)
-  #
-  # # Initialize training neighbor finder to retrieve temporal graph
-  # train_ngh_finder = get_neighbor_finder(train_data, args.uniform)
-  # train_rand_sampler = RandEdgeSampler(train_data.sources, train_data.destinations)
+for i in range(args.n_runs):
+  results_path = "results/{}_{}/result_{}.pkl".format(args.data, args.prefix, i)
+  parent_path = "results/{}_{}/".format(args.data, args.prefix)
+  Path(parent_path).mkdir(parents=True, exist_ok=True)
 
   # Initialize Model
   tgn = TGN(neighbor_finder=train_ngh_finder, node_features=node_features,
@@ -275,10 +272,12 @@ for i in range(args.n_runs):
       # validation on unseen nodes
       train_memory_backup = tgn.memory.backup_memory()
 
-    val_ap, val_auc, val_f1, val_acc, val_spe, val_sen = eval_edge_prediction(model=tgn,
+    val_ap, val_auc, val_f1, val_acc, val_spe, val_sen, val_wrong_set = eval_edge_prediction(model=tgn,
                                                             negative_edge_sampler=val_rand_sampler,
                                                             data=val_data,
                                                             n_neighbors=NUM_NEIGHBORS)
+    val_pred_wrong_list[str(i+1)+'-'+str(epoch+1)] = val_wrong_set
+
     if USE_MEMORY:
       val_memory_backup = tgn.memory.backup_memory()
       # Restore memory we had at the end of training to be used when validating on new nodes.
@@ -287,10 +286,12 @@ for i in range(args.n_runs):
       tgn.memory.restore_memory(train_memory_backup)
 
     # Validate on unseen nodes
-    nn_val_ap, nn_val_auc, nn_val_f1, nn_val_acc, nn_val_spe, nn_val_sen = eval_edge_prediction(model=tgn,
+    nn_val_ap, nn_val_auc, nn_val_f1, nn_val_acc, nn_val_spe, nn_val_sen, nn_val_wrong_set = eval_edge_prediction(model=tgn,
                                                                         negative_edge_sampler=val_rand_sampler,
                                                                         data=new_node_val_data,
                                                                         n_neighbors=NUM_NEIGHBORS)
+
+    nn_val_pred_wrong_list[str(i+1)+'-'+str(epoch+1)] = nn_val_wrong_set
 
     if USE_MEMORY:
       # Restore memory we had at the end of validation
@@ -356,19 +357,21 @@ for i in range(args.n_runs):
 
   ### Test
   tgn.embedding_module.neighbor_finder = full_ngh_finder
-  test_ap, test_auc, test_f1, test_acc, test_spe, test_sen = eval_edge_prediction(model=tgn,
+  test_ap, test_auc, test_f1, test_acc, test_spe, test_sen, test_wrong_set = eval_edge_prediction(model=tgn,
                                                               negative_edge_sampler=test_rand_sampler,
                                                               data=test_data,
                                                               n_neighbors=NUM_NEIGHBORS)
+  test_pred_wrong_list[str(i+1)] = test_wrong_set
 
   if USE_MEMORY:
     tgn.memory.restore_memory(val_memory_backup)
 
   # Test on unseen nodes
-  nn_test_ap, nn_test_auc, nn_test_f1, nn_test_acc, nn_test_spe, nn_test_sen = eval_edge_prediction(model=tgn,
+  nn_test_ap, nn_test_auc, nn_test_f1, nn_test_acc, nn_test_spe, nn_test_sen, nn_test_wrong_set = eval_edge_prediction(model=tgn,
                                                                           negative_edge_sampler=nn_test_rand_sampler,
                                                                           data=new_node_test_data,
                                                                           n_neighbors=NUM_NEIGHBORS)
+  nn_test_pred_wrong_list[str(i+1)] = nn_test_wrong_set
 
   logger.info(
     'Test statistics: Old nodes -- auc: {}, ap: {}'.format(test_auc, test_ap))
@@ -407,3 +410,17 @@ for i in range(args.n_runs):
     tgn.memory.restore_memory(val_memory_backup)
   torch.save(tgn.state_dict(), MODEL_SAVE_PATH)
   logger.info('TGN model saved')
+
+
+pred_wrong_dict={'val':[],'nn_val':[],'test':[],'nn_test':[]}
+pred_wrong_dict['val']=val_pred_wrong_list
+pred_wrong_dict['test']=test_pred_wrong_list
+pred_wrong_dict['nn_val']=nn_val_pred_wrong_list
+pred_wrong_dict['nn_test']=nn_test_pred_wrong_list
+
+pred_wrong_path = "pred_wrong/{}_pred_wrong_new_new.json".format(args.data)
+pred_wrong_parent_path = "pred_wrong/"
+Path(pred_wrong_parent_path).mkdir(parents=True, exist_ok=True)
+
+with open(pred_wrong_path, 'w') as file:
+    file.write(json.dumps(pred_wrong_dict))

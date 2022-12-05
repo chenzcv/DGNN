@@ -68,6 +68,7 @@ parser.add_argument('--skip', type=int, default=1, help='sample the training dat
 parser.add_argument('--random_sample', action='store_true', help='random sample the training dataset')
 parser.add_argument('--id', type=int, default=0, help='no. of experiment')
 parser.add_argument('--early_stop', action='store_true', help='whether early stop')
+parser.add_argument('--sample_type', type=str, default=None, help='sample type:[uniform, tbatch]')
 
 
 
@@ -95,9 +96,11 @@ MEMORY_DIM = args.memory_dim
 
 Path("./saved_models/").mkdir(parents=True, exist_ok=True)
 Path("./saved_checkpoints/").mkdir(parents=True, exist_ok=True)
-MODEL_SAVE_PATH = f'./saved_models/{args.prefix}-{args.data}-sample{args.skip}-combine.pth'
+MODEL_SAVE_PATH = f'./saved_models/{args.data}-{args.prefix}-sample{args.skip}-combine-memory.pth' if args.use_memory \
+    else f'./saved_models/{args.data}-{args.prefix}-sample{args.skip}-combine.pth'
 get_checkpoint_path = lambda \
-    epoch: f'./saved_checkpoints/{args.prefix}-{args.data}-sample{args.skip}-combine-{epoch}.pth'
+    epoch: f'./saved_checkpoints/{args.data}-{args.prefix}-sample{args.skip}-combine-memory-{epoch}.pth' if args.use_memory \
+    else f'./saved_checkpoints/{args.data}-{args.prefix}-sample{args.skip}-combine-{epoch}.pth'
 
 ### set up logger
 logging.basicConfig(level=logging.INFO)
@@ -119,11 +122,11 @@ logger.info(args)
 node_features, edge_features, full_data, train_data, val_data, test_data, new_node_val_data, \
 new_node_test_data = get_data(DATA,different_new_nodes_between_val_and_test=args.different_new_nodes,
                               randomize_features=args.randomize_features, sample=args.skip,
-                              random_sample=args.random_sample, exp_id=0)
+                              random_sample=args.random_sample, exp_id=0, sample_type=args.sample_type)
 
 _, _, _, train_data2, _, _, _, _ = get_data(DATA,different_new_nodes_between_val_and_test=args.different_new_nodes,
                               randomize_features=args.randomize_features, sample=args.skip,
-                              random_sample=args.random_sample, exp_id=1)
+                              random_sample=args.random_sample, exp_id=1, sample_type=args.sample_type)
 
 # Initialize training neighbor finder to retrieve temporal graph
 train_ngh_finder = get_neighbor_finder(train_data, args.uniform)
@@ -157,8 +160,10 @@ mean_time_shift_src, std_time_shift_src, mean_time_shift_dst, std_time_shift_dst
 for i in range(1):
   # results_path = "results/{}_sample{}-{}/result.pkl".format(args.prefix, args.skip, args.id)
   # parent_path = "results/{}_sample{}-{}/".format(args.prefix, args.skip, args.id)
-  results_path = "results/{}_sample{}-combine/result.pkl".format(args.prefix, args.skip)
-  parent_path = "results/{}_sample{}-combine/".format(args.prefix, args.skip)
+  results_path = "results/{}-{}_sample{}-combine-memory/result.pkl".format(args.data, args.prefix, args.skip) if args.use_memory \
+      else "results/{}-{}_sample{}-combine/result.pkl".format(args.data, args.prefix, args.skip)
+  parent_path = "results/{}-{}_sample{}-combine-memory/".format(args.data, args.prefix, args.skip) if args.use_memory \
+      else "results/{}-{}_sample{}-combine/".format(args.data, args.prefix, args.skip)
   Path(parent_path).mkdir(parents=True, exist_ok=True)
 
   # Initialize Model
@@ -239,6 +244,7 @@ for i in range(1):
     # Reinitialize memory of the model at the start of each epoch
     if USE_MEMORY:
       tgn.memory.__init_memory__()
+      tgn2.memory.__init_memory__()
 
     # Train using only training graph
     tgn.set_neighbor_finder(train_ngh_finder)
@@ -274,6 +280,7 @@ for i in range(1):
 
         size = len(sources_batch)
         _, negatives_batch = train_rand_sampler.sample(size)    #sample negatives
+        _, negatives_batch2 = train_rand_sampler2.sample(size)  # sample negatives
 
         with torch.no_grad():
           pos_label = torch.ones(size, dtype=torch.float, device=device)
@@ -290,7 +297,7 @@ for i in range(1):
 
         # ---------------------------combine----------------------------
         tgn2 = tgn2.train()
-        pos_prob2, neg_prob2 = tgn2.compute_edge_probabilities(sources_batch2, destinations_batch2, negatives_batch,
+        pos_prob2, neg_prob2 = tgn2.compute_edge_probabilities(sources_batch2, destinations_batch2, negatives_batch2,
                                                             timestamps_batch2, edge_idxs_batch2, NUM_NEIGHBORS)
 
         loss2 += criterion(pos_prob2.squeeze(), pos_label2) + criterion(neg_prob2.squeeze(), neg_label2)
@@ -303,13 +310,16 @@ for i in range(1):
       optimizer.step()
 
       m_loss.append(loss.item())
-      tgn.load_state_dict(load_model(tgn,tgn2))
-      tgn2.load_state_dict(copy.deepcopy(tgn.state_dict()))
+      tgn_model = copy.deepcopy(tgn.state_dict())
+      tgn2_model = copy.deepcopy(tgn2.state_dict())
+      tgn.load_state_dict(load_model(tgn_model,tgn2_model))
+      tgn2.load_state_dict(load_model(tgn_model,tgn2_model))
 
       # Detach memory after 'args.backprop_every' number of batches so we don't backpropagate to
       # the start of time
       if USE_MEMORY:
         tgn.memory.detach_memory()
+        tgn2.memory.detach_memory()
 
     epoch_time = time.time() - start_epoch
     epoch_times.append(epoch_time)
