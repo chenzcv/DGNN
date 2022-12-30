@@ -57,3 +57,6 @@ FB-Forum (or directly download the 'fb-forum.edges' in file /data/fb)
 ```
 wget https://nrvis.com/download/data/dynamic/fb-forum.zip
 ```
+
+Enron-Email
+Download Link: https://www.kaggle.com/datasets/wcukierski/enron-email-dataset
