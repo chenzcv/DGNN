@@ -30,6 +30,16 @@ Divide the dataset into m t-batch, for each epoch, randomly sampled k t-batch (k
 python train_tbatch.py --use_memory --prefix tgn-attn --sample_type t-batch --skip 4 --id 0
 ```
 # Data Exploration (Download Raw Data)
+MOOC
+
+```
+wget http://snap.stanford.edu/jodie/mooc.csv
+```
+LastFM
+
+```
+wget http://snap.stanford.edu/jodie/lastfm.csv
+```
 Autonomous systems AS-733
 
 ```
