@@ -54,6 +54,6 @@ wget https://files.grouplens.org/datasets/movielens/ml-10m.zip
 
 FB-Forum (or directly download the 'fb-forum.edges' in file /data/fb)
 
-···
+```
 wget https://nrvis.com/download/data/dynamic/fb-forum.zip
 ```
