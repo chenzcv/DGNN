@@ -45,3 +45,9 @@ Autonomous systems AS-733
 ```
 wget http://snap.stanford.edu/data/as20000102.txt.gz
 ```
+
+MovieLens-10M (or directly download the 'tags.dat' in file /data)
+
+```
+wget https://files.grouplens.org/datasets/movielens/ml-10m.zip
+```
