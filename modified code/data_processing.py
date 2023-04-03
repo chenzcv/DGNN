@@ -5,7 +5,7 @@ import math
 
 
 class Data:
-  def __init__(self, sources, destinations, timestamps, edge_idxs, labels, sample=1, random_sample=False):
+  def __init__(self, sources, destinations, timestamps, edge_idxs, labels, sample=1, random_sample=False, exp_id=0, sample_type=None):
     if random_sample:
       random_index = np.random.choice(len(sources), math.ceil(len(sources)/sample), replace=False).tolist()
       random_index = sorted(random_index)
@@ -15,11 +15,77 @@ class Data:
       edge_idxs = edge_idxs[random_index]
       labels = labels[random_index]
     else:
-      sources = sources[::sample]
-      destinations = destinations[::sample]
-      timestamps = timestamps[::sample]
-      edge_idxs = edge_idxs[::sample]
-      labels = labels[::sample]
+      '''
+      Partition the dataset into two datasets D1, D2 by sampling two data points 
+      from every 2/4/8/16/32 data points
+      '''
+      # if sample != 1:
+      #   n = int(len(sources)/sample)
+      #   cur_sources=[]
+      #   cur_destinations=[]
+      #   cur_timestamps=[]
+      #   cur_edge_idxs=[]
+      #   cur_labels=[]
+      #   random.seed(exp_id)
+      #   random_num_list = sorted(random.sample(range(0, sample), 2))
+      #   for i in range(n):
+      #     for random_num in random_num_list:
+      #       cur_sources.append(sources[i*sample:(i+1)*sample][random_num])
+      #       cur_destinations.append(destinations[i*sample:(i+1)*sample][random_num])
+      #       cur_timestamps.append(timestamps[i*sample:(i+1)*sample][random_num])
+      #       cur_edge_idxs.append(edge_idxs[i*sample:(i+1)*sample][random_num])
+      #       cur_labels.append(labels[i*sample:(i+1)*sample][random_num])
+      #   sources = np.array(cur_sources)
+      #   destinations = np.array(cur_destinations)
+      #   timestamps = np.array(cur_timestamps)
+      #   edge_idxs = np.array(cur_edge_idxs)
+      #   labels = np.array(cur_labels)
+
+      '''
+        Divide the dataset into m t-batch, for each epoch, 
+        randomly sampled k = {1,2,4,8} t-batch from the m t-batch
+      '''
+      if sample != 1:
+        cur_sources = []
+        cur_destinations = []
+        cur_timestamps = []
+        cur_edge_idxs = []
+        cur_labels = []
+        random.seed(exp_id)
+        if sample_type == 'uniform':
+          n = int(len(sources)/sample)
+          random_num_list = sorted(random.sample(range(0, sample), 2))
+          for i in range(n):
+            for random_num in random_num_list:
+              cur_sources.append(sources[i*sample:(i+1)*sample][random_num])
+              cur_destinations.append(destinations[i*sample:(i+1)*sample][random_num])
+              cur_timestamps.append(timestamps[i*sample:(i+1)*sample][random_num])
+              cur_edge_idxs.append(edge_idxs[i*sample:(i+1)*sample][random_num])
+              cur_labels.append(labels[i*sample:(i+1)*sample][random_num])
+        elif sample_type == 'tbatch':
+          if sample == 11:
+            sample = 1
+          m=32
+          n = int(len(sources)/m)
+          random_num_list = sorted(random.sample(range(0, m), sample)) #m=32, sample is k={1,2,4,8}
+          for i in random_num_list:
+            cur_sources.extend(sources[i * n:(i + 1) * n])
+            cur_destinations.extend(destinations[i*n:(i+1)*n])
+            cur_timestamps.extend(timestamps[i*n:(i+1)*n])
+            cur_edge_idxs.extend(edge_idxs[i*n:(i+1)*n])
+            cur_labels.extend(labels[i*n:(i+1)*n])
+        sources = np.array(cur_sources)
+        destinations = np.array(cur_destinations)
+        timestamps = np.array(cur_timestamps)
+        edge_idxs = np.array(cur_edge_idxs)
+        labels = np.array(cur_labels)
+      else:
+        exp_id=0
+        sources = sources[exp_id:][::sample]
+        destinations = destinations[exp_id:][::sample]
+        timestamps = timestamps[exp_id:][::sample]
+        edge_idxs = edge_idxs[exp_id:][::sample]
+        labels = labels[exp_id:][::sample]
 
     self.sources = sources
     self.destinations = destinations
@@ -65,7 +131,7 @@ def get_data_node_classification(dataset_name, use_validation=False):
   return full_data, node_features, edge_features, train_data, val_data, test_data
 
 
-def get_data(dataset_name, different_new_nodes_between_val_and_test=False, randomize_features=False, sample=0, random_sample=False):
+def get_data(dataset_name, different_new_nodes_between_val_and_test=False, randomize_features=False, sample=0, random_sample=False, exp_id=0, sample_type=None):
   ### Load data and train val test split
   graph_df = pd.read_csv('./utils/data/ml_{}.csv'.format(dataset_name))
   edge_features = np.load('./utils/data/ml_{}.npy'.format(dataset_name))
@@ -155,7 +221,7 @@ def get_data(dataset_name, different_new_nodes_between_val_and_test=False, rando
 
   if sample != 1:
     train_data = Data(sources[train_mask], destinations[train_mask], timestamps[train_mask],
-                            edge_idxs[train_mask], labels[train_mask], sample=sample, random_sample=random_sample)
+                            edge_idxs[train_mask], labels[train_mask], sample=sample, random_sample=random_sample, exp_id=exp_id, sample_type=sample_type)
 
   print("The dataset has {} interactions, involving {} different nodes".format(full_data.n_interactions,
                                                                       full_data.n_unique_nodes))
