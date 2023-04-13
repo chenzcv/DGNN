@@ -10,8 +10,9 @@ from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
 import seaborn as sns
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
 from matplotlib.colors import ListedColormap
-
 
 
 def visualize_attention_weight(attention_weight, split):
@@ -24,7 +25,7 @@ def visualize_attention_weight(attention_weight, split):
     # plt.savefig('./figures2/attention_weight_{}.jpg'.format(split))
 
 
-def plot_embedding_2D(data, title, split):
+def plot_embedding_2D(data, title, split, neighbor=None, classifier='KNN'):
     size = data.shape[0]
     size //= 2
     x_min, x_max = np.min(data, 0), np.max(data, 0)
@@ -41,36 +42,47 @@ def plot_embedding_2D(data, title, split):
     X2d_ymin, X2d_ymax = np.min(data[:, 1]), np.max(data[:, 1])
     xx, yy = np.meshgrid(np.linspace(X2d_xmin, X2d_xmax, resolution), np.linspace(X2d_ymin, X2d_ymax, resolution))
     # approximate Voronoi tesselation on resolution x resolution grid using 1-NN
-    background_model = KNeighborsClassifier(n_neighbors=1).fit(data, label)
+    if classifier == 'KNN':
+        background_model = KNeighborsClassifier(n_neighbors=neighbor).fit(data, label)
+    elif classifier == 'DT':
+        background_model = DecisionTreeClassifier(max_depth=4).fit(data, label)
+    elif classifier == 'SVM':
+        background_model = SVC(gamma=0.1, kernel="rbf", probability=True).fit(data, label)
+
     voronoiBackground = background_model.predict(np.c_[xx.ravel(), yy.ravel()])
     voronoiBackground = voronoiBackground.reshape((resolution, resolution))
 
     # plot
-    custom_cmap = ListedColormap(['#9898ff','#a0faa0'])
+    custom_cmap = ListedColormap(['#9898ff', '#a0faa0'])
     plt.contourf(xx, yy, voronoiBackground, alpha=0.3, cmap=custom_cmap)
     s1 = plt.scatter(data[:size, 0], data[:size, 1], c='blue')
     s2 = plt.scatter(data[size:, 0], data[size:, 1], c='yellow')
     # plt.colorbar()
     plt.title(title)
     plt.legend((s1, s2), ('pos', 'neg'), loc='best')
-    plt.savefig('./figures2/{}.jpg'.format(split))
+    plt.savefig('./figures2/{}_{}.jpg'.format(split, classifier))
     return fig
 
 
-def calculate_TSNE(h, split, k):
+def calculate_TSNE(h, split, k, neighbor=None, classifier='KNN'):
     tsne = TSNE(n_components=2, init='pca', random_state=0)
     result = tsne.fit_transform(h.cpu().detach().numpy())
     split = split + '_' + str(k)
-    fig1 = plot_embedding_2D(result, 't-SNE', split)
+    fig1 = plot_embedding_2D(result, 't-SNE', split, neighbor, classifier)
     plt.show()
 
-def eval_edge_prediction(model, negative_edge_sampler, data, n_neighbors, batch_size=200, split='test'):
+
+def eval_edge_prediction(model, negative_edge_sampler, data, n_neighbors, batch_size=200, split='test',
+                         negative_edge=None, use_tsne=False, visual_att=False):
     # Ensures the random sampler uses a seed for evaluation (i.e. we sample always the same
     # negatives for validation / test set)
     assert negative_edge_sampler.seed is not None
     negative_edge_sampler.reset_random_state()
 
     val_ap, val_auc = [], []
+    val_ap_pos, val_auc_pos = [], []
+    val_ap_neg, val_auc_neg = [], []
+
     val_f1, val_acc = [], []
     val_spe, val_sen = [], []
     with torch.no_grad():
@@ -94,7 +106,10 @@ def eval_edge_prediction(model, negative_edge_sampler, data, n_neighbors, batch_
             edge_idxs_batch = data.edge_idxs[s_idx: e_idx]
 
             size = len(sources_batch)
-            _, negative_samples = negative_edge_sampler.sample(size)
+            if negative_edge is not None:
+                negative_samples = np.random.choice(negative_edge, size, replace=False)
+            else:
+                _, negative_samples = negative_edge_sampler.sample(size)
 
             if split == 'small' or split == 'large' or split == 'avg':
                 model.use_memory = False
@@ -108,8 +123,13 @@ def eval_edge_prediction(model, negative_edge_sampler, data, n_neighbors, batch_
                 model.use_memory = True
                 model.embedding_module.use_memory = True
             if split == 'test' or split == 'test_unseen':
-            #     visualize_attention_weight(attention_weight, split + '_' + str(k))
-                calculate_TSNE(h, split, k)
+                if visual_att:
+                    visualize_attention_weight(attention_weight, split + '_' + str(k))
+                if use_tsne:
+                    calculate_TSNE(h, split, k, classifier='DT')
+                    calculate_TSNE(h, split, k, classifier='SVM')
+                    calculate_TSNE(h, split, k, neighbor=3)
+                    calculate_TSNE(h, split, k, neighbor=5)
 
             pred_score = np.concatenate([(pos_prob).cpu().numpy(), (neg_prob).cpu().numpy()])
             true_label = np.concatenate([np.ones(size), np.zeros(size)])
@@ -130,6 +150,22 @@ def eval_edge_prediction(model, negative_edge_sampler, data, n_neighbors, batch_
 
             val_ap.append(average_precision_score(true_label, pred_score))
             val_auc.append(roc_auc_score(true_label, pred_score))
+            pos_prob = [int(item > 0.5) for item in pos_prob.cpu().numpy()]
+            neg_prob = [int(item > 0.5) for item in neg_prob.cpu().numpy()]
+            correct_pos = np.equal(pos_prob, np.ones(size))
+            correct_neg = np.equal(neg_prob, np.zeros(size))
+            val_ap_pos.append(np.mean(correct_pos))
+            val_ap_neg.append(np.mean(correct_neg))
+
+            if split == 'small' or split == 'large' or split == 'avg':
+                pos_prob = [int(item > 0.5) for item in pos_prob.cpu().numpy()]
+                neg_prob = [int(item > 0.5) for item in neg_prob.cpu().numpy()]
+                correct_pos = np.equal(pos_prob, np.ones(size))
+                correct_neg = np.equal(neg_prob, np.zeros(size))
+                val_ap_pos.append(np.mean(correct_pos))
+                val_ap_neg.append(np.mean(correct_neg))
+
+                return np.mean(val_ap), np.mean(val_auc), np.mean(val_ap_pos), np.mean(val_ap_neg)
 
             pred_score = [int(item > 0.5) for item in pred_score]
             val_f1.append(f1_score(y_true=true_label, y_pred=pred_score))
