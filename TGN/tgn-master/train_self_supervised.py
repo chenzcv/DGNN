@@ -15,6 +15,7 @@ from utils.data_processing import get_data, compute_time_statistics, Data
 import json
 from cal_TSNE import calculate_TSNE, plot_statics
 import math
+import copy
 
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -74,6 +75,10 @@ parser.add_argument('--sample_type', type=str, default=None, help='sample type:[
 parser.add_argument('--refresh_history_cache', action='store_true',
                     help='Whether to augment the model with the Refresh history cache')
 parser.add_argument('--interval', type=int, default=10000, help='no. of experiment')
+parser.add_argument('--tsne', action='store_true')
+parser.add_argument('--visual_att', action='store_true')
+
+
 try:
     args = parser.parse_args()
 except:
@@ -155,6 +160,7 @@ device = torch.device(device_string)
 mean_time_shift_src, std_time_shift_src, mean_time_shift_dst, std_time_shift_dst = \
     compute_time_statistics(full_data.sources, full_data.destinations, full_data.timestamps)
 
+# =========================================================================================#
 val_pred_wrong_list = {}
 test_pred_wrong_list = {'1': [], '2': [], '3': [], '4': [], '5': []}
 nn_val_pred_wrong_list = {}
@@ -177,14 +183,22 @@ average_degree_idx = np.sort(np.where(train_data.sources == average_v_list[:, 0]
 small_degree_data = Data(train_data.sources[small_degree_idx], train_data.destinations[small_degree_idx],
                          train_data.timestamps[small_degree_idx], train_data.edge_idxs[small_degree_idx],
                          train_data.labels[small_degree_idx])
+small_negative_edge = np.setdiff1d(train_data.destinations, small_degree_data.destinations, assume_unique=False)
+small_neg_size = small_negative_edge.size
 
 large_degree_data = Data(train_data.sources[large_degree_idx], train_data.destinations[large_degree_idx],
                          train_data.timestamps[large_degree_idx], train_data.edge_idxs[large_degree_idx],
                          train_data.labels[large_degree_idx])
+large_negative_edge = np.setdiff1d(train_data.destinations, large_degree_data.destinations, assume_unique=False)
+large_neg_size = large_negative_edge.size
 
 average_degree_data = Data(train_data.sources[average_degree_idx], train_data.destinations[average_degree_idx],
                            train_data.timestamps[average_degree_idx], train_data.edge_idxs[average_degree_idx],
                            train_data.labels[average_degree_idx])
+avg_negative_edge = np.setdiff1d(train_data.destinations, average_degree_data.destinations, assume_unique=False)
+avg_neg_size = avg_negative_edge.size
+# =========================================================================================#
+
 
 for i in range(args.n_runs):
     results_path = "results/{}_{}/result_{}.pkl".format(args.data, args.prefix, i)
@@ -288,23 +302,6 @@ for i in range(args.n_runs):
                 edge_idxs_batch = train_data.edge_idxs[start_idx: end_idx]
                 timestamps_batch = train_data.timestamps[start_idx:end_idx]
 
-                count_ten = 0
-                count_thirty = 0
-                count_fifty = 0
-                count_seventy = 0
-                count_hundred = 0
-                for s_node in sources_batch:
-                    if v_list[s_node] <= 10:
-                        count_ten += 1
-                    elif v_list[s_node] > 10 and v_list[s_node] <= 30:
-                        count_thirty += 1
-                    elif v_list[s_node] > 30 and v_list[s_node] <= 50:
-                        count_fifty += 1
-                    elif v_list[s_node] > 50 and v_list[s_node] <= 70:
-                        count_seventy += 1
-                    else:
-                        count_hundred += 1
-
                 size = len(sources_batch)
                 _, negatives_batch = train_rand_sampler.sample(size)  # sample negatives
 
@@ -316,7 +313,7 @@ for i in range(args.n_runs):
                 pos_prob, neg_prob, h, _ = tgn.compute_edge_probabilities(
                     sources_batch, destinations_batch,
                     negatives_batch,
-                    timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS, epoch=epoch)
+                    timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS, epoch=epoch, batch=k)
 
                 loss += criterion(pos_prob.squeeze(), pos_label) + criterion(neg_prob.squeeze(), neg_label)
 
@@ -334,6 +331,8 @@ for i in range(args.n_runs):
 
             loss /= args.backprop_every
 
+            # loss = loss.detach_().requires_grad_(True)
+            # loss.backward(retain_graph=True)
             loss.backward()
             optimizer.step()
             m_loss.append(loss.item())
@@ -352,7 +351,7 @@ for i in range(args.n_runs):
         cos_similarity_list = []
         step = 1
 
-        if epoch == 51:
+        if epoch == 0:
             for num in range(step, len(tgn.memory_list)):
                 last_memory = tgn.memory_list[num - step]
                 cur_memory = tgn.memory_list[num]
@@ -364,13 +363,17 @@ for i in range(args.n_runs):
                 #     calculate_TSNE(cur_memory, 'memory', num)
             for num in range(len(tgn.memory_list)):
                 cur_memory = tgn.memory_list[num]
-                mean_meomry.append(torch.mean(cur_memory.cpu()).detach().numpy())
+                mean_meomry.append(torch.mean(torch.mean(cur_memory.cpu(), dim=0)).detach().numpy())
                 variance_memory.append(torch.var(cur_memory.cpu(), unbiased=True).detach().numpy())
                 std_memory.append(torch.std(cur_memory.cpu()).detach().numpy())
 
-            tgn.memory_list = []
+            # tgn.memory_list = []
+            # mean_meomry = np.stack(mean_meomry)
+            # mean_meomry = calculate_TSNE(mean_meomry, n=1)
+            # x_min, x_max = np.min(mean_meomry, 0), np.max(mean_meomry, 0)
+            # mean_meomry = (mean_meomry - x_min) / (x_max - x_min)
+
             # plot_statics(train_ap, 'ap' + str(BATCH_SIZE))
-            # plot_statics(train_auc, 'auc' + str(BATCH_SIZE))
             plot_statics(mean_meomry, 'mean' + str(BATCH_SIZE))
             plot_statics(cos_similarity_list, 'cosine similarity' + str(BATCH_SIZE))
             plot_statics(variance_memory, 'variance' + str(BATCH_SIZE))
@@ -383,27 +386,30 @@ for i in range(args.n_runs):
             # plot_statics(std_memory, 'standard deviation' + str(interval))
 
         # train_rand_sampler.seed = 1
-        #
-        # small_ap, small_auc, small_f1, small_acc, small_spe, small_sen, small_wrong_set = eval_edge_prediction(
+
+        # small_ap, small_auc, small_ap_pos, small_ap_neg = eval_edge_prediction(
         #     model=tgn,
         #     negative_edge_sampler=train_rand_sampler,
         #     data=small_degree_data,
         #     n_neighbors=NUM_NEIGHBORS,
-        #     split='small')
+        #     split='small',
+        #     negative_edge=small_negative_edge)
         #
-        # large_ap, large_auc, large_f1, large_acc, large_spe, large_sen, large_wrong_set = eval_edge_prediction(
+        # large_ap, large_auc, large_ap_pos, large_ap_neg = eval_edge_prediction(
         #     model=tgn,
         #     negative_edge_sampler=train_rand_sampler,
         #     data=large_degree_data,
         #     n_neighbors=NUM_NEIGHBORS,
-        #     split='large')
+        #     split='large',
+        #     negative_edge=large_negative_edge)
         #
-        # avg_ap, avg_auc, avg_f1, avg_acc, avg_spe, avg_sen, avg_wrong_set = eval_edge_prediction(
+        # avg_ap, avg_auc, avg_ap_pos, avg_ap_neg = eval_edge_prediction(
         #     model=tgn,
         #     negative_edge_sampler=train_rand_sampler,
         #     data=average_degree_data,
         #     n_neighbors=NUM_NEIGHBORS,
-        #     split='avg')
+        #     split='avg',
+        #     negative_edge=avg_negative_edge)
         # train_rand_sampler.seed = None
 
         ### Validation
@@ -517,7 +523,9 @@ for i in range(args.n_runs):
                                                                                                     negative_edge_sampler=test_rand_sampler,
                                                                                                     data=test_data,
                                                                                                     n_neighbors=NUM_NEIGHBORS,
-                                                                                                    split='test')
+                                                                                                    split='test',
+                                                                                                    use_tsne=args.tsne,
+                                                                                                    visual_att=args.visual_att)
     test_pred_wrong_list[str(i + 1)] = test_wrong_set
 
     if USE_MEMORY:
@@ -534,7 +542,9 @@ for i in range(args.n_runs):
         negative_edge_sampler=nn_test_rand_sampler,
         data=new_node_test_data,
         n_neighbors=NUM_NEIGHBORS,
-        split='test_unseen')
+        split='test_unseen',
+        use_tsne=args.tsne,
+        visual_att=args.visual_att)
     nn_test_pred_wrong_list[str(i + 1)] = nn_test_wrong_set
 
     # wandb.log({
