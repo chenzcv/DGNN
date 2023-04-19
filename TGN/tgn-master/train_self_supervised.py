@@ -77,7 +77,11 @@ parser.add_argument('--refresh_history_cache', action='store_true',
 parser.add_argument('--interval', type=int, default=10000, help='no. of experiment')
 parser.add_argument('--tsne', action='store_true')
 parser.add_argument('--visual_att', action='store_true')
-
+parser.add_argument('--interval_as_batch', action='store_true')
+parser.add_argument('--test_degree', action='store_true')
+parser.add_argument('--compute_statistic', action='store_true')
+parser.add_argument('--backward_smooth', action='store_true')
+parser.add_argument('--exp_smooth', action='store_true')
 
 try:
     args = parser.parse_args()
@@ -313,7 +317,8 @@ for i in range(args.n_runs):
                 pos_prob, neg_prob, h, _ = tgn.compute_edge_probabilities(
                     sources_batch, destinations_batch,
                     negatives_batch,
-                    timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS, epoch=epoch, batch=k)
+                    timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS, epoch=epoch, batch=k,
+                    back_smooth=args.back_smooth, exp_smooth=args.exp_smooth)
 
                 loss += criterion(pos_prob.squeeze(), pos_label) + criterion(neg_prob.squeeze(), neg_label)
 
@@ -351,7 +356,7 @@ for i in range(args.n_runs):
         cos_similarity_list = []
         step = 1
 
-        if epoch == 0:
+        if args.compute_statistic and epoch == 0:
             for num in range(step, len(tgn.memory_list)):
                 last_memory = tgn.memory_list[num - step]
                 cur_memory = tgn.memory_list[num]
@@ -367,11 +372,11 @@ for i in range(args.n_runs):
                 variance_memory.append(torch.var(cur_memory.cpu(), unbiased=True).detach().numpy())
                 std_memory.append(torch.std(cur_memory.cpu()).detach().numpy())
 
-            # tgn.memory_list = []
-            # mean_meomry = np.stack(mean_meomry)
-            # mean_meomry = calculate_TSNE(mean_meomry, n=1)
-            # x_min, x_max = np.min(mean_meomry, 0), np.max(mean_meomry, 0)
-            # mean_meomry = (mean_meomry - x_min) / (x_max - x_min)
+            tgn.memory_list = []
+            mean_meomry = np.stack(mean_meomry)
+            mean_meomry = calculate_TSNE(mean_meomry, n=1)
+            x_min, x_max = np.min(mean_meomry, 0), np.max(mean_meomry, 0)
+            mean_meomry = (mean_meomry - x_min) / (x_max - x_min)
 
             # plot_statics(train_ap, 'ap' + str(BATCH_SIZE))
             plot_statics(mean_meomry, 'mean' + str(BATCH_SIZE))
@@ -385,32 +390,44 @@ for i in range(args.n_runs):
             # plot_statics(variance_memory, 'variance' + str(interval))
             # plot_statics(std_memory, 'standard deviation' + str(interval))
 
-        # train_rand_sampler.seed = 1
+        if args.test_degree:
+            train_rand_sampler.seed = 1
 
-        # small_ap, small_auc, small_ap_pos, small_ap_neg = eval_edge_prediction(
-        #     model=tgn,
-        #     negative_edge_sampler=train_rand_sampler,
-        #     data=small_degree_data,
-        #     n_neighbors=NUM_NEIGHBORS,
-        #     split='small',
-        #     negative_edge=small_negative_edge)
-        #
-        # large_ap, large_auc, large_ap_pos, large_ap_neg = eval_edge_prediction(
-        #     model=tgn,
-        #     negative_edge_sampler=train_rand_sampler,
-        #     data=large_degree_data,
-        #     n_neighbors=NUM_NEIGHBORS,
-        #     split='large',
-        #     negative_edge=large_negative_edge)
-        #
-        # avg_ap, avg_auc, avg_ap_pos, avg_ap_neg = eval_edge_prediction(
-        #     model=tgn,
-        #     negative_edge_sampler=train_rand_sampler,
-        #     data=average_degree_data,
-        #     n_neighbors=NUM_NEIGHBORS,
-        #     split='avg',
-        #     negative_edge=avg_negative_edge)
-        # train_rand_sampler.seed = None
+            small_ap, small_auc, small_ap_pos, small_ap_neg = eval_edge_prediction(
+                model=tgn,
+                negative_edge_sampler=train_rand_sampler,
+                data=small_degree_data,
+                n_neighbors=NUM_NEIGHBORS,
+                split='small',
+                negative_edge=small_negative_edge)
+
+            large_ap, large_auc, large_ap_pos, large_ap_neg = eval_edge_prediction(
+                model=tgn,
+                negative_edge_sampler=train_rand_sampler,
+                data=large_degree_data,
+                n_neighbors=NUM_NEIGHBORS,
+                split='large',
+                negative_edge=large_negative_edge)
+
+            avg_ap, avg_auc, avg_ap_pos, avg_ap_neg = eval_edge_prediction(
+                model=tgn,
+                negative_edge_sampler=train_rand_sampler,
+                data=average_degree_data,
+                n_neighbors=NUM_NEIGHBORS,
+                split='avg',
+                negative_edge=avg_negative_edge)
+            train_rand_sampler.seed = None
+
+            print('small degree: ap:{}, auc:{}, pos_accuracy:{}, neg_accuracy:{}'.format(str(small_ap), str(small_auc),
+                                                                                         str(small_ap_pos),
+                                                                                         str(small_ap_neg)))
+            print('large degree: ap:{}, auc:{}, pos_accuracy:{}, neg_accuracy:{}'.format(str(large_ap), str(large_auc),
+                                                                                         str(large_ap_pos),
+                                                                                         str(large_ap_neg)))
+            print('average degree: ap:{}, auc:{}, pos_accuracy:{}, neg_accuracy:{}'.format(str(avg_ap), str(avg_auc),
+                                                                                           str(avg_ap_pos),
+                                                                                           str(avg_ap_neg)))
+            break
 
         ### Validation
         # Validation uses the full graph
@@ -592,18 +609,3 @@ for i in range(args.n_runs):
         tgn.memory.restore_memory(val_memory_backup)
     torch.save(tgn.state_dict(), MODEL_SAVE_PATH)
     logger.info('TGN model saved')
-
-pred_wrong_dict = {'val': [], 'nn_val': [], 'test': [], 'nn_test': []}
-pred_wrong_dict['val'] = val_pred_wrong_list
-pred_wrong_dict['test'] = test_pred_wrong_list
-pred_wrong_dict['nn_val'] = nn_val_pred_wrong_list
-pred_wrong_dict['nn_test'] = nn_test_pred_wrong_list
-
-# pred_wrong_path = "pred_wrong/{}_pred_wrong_negative_new.json".format(args.data)
-# pred_wrong_parent_path = "pred_wrong/"
-pred_wrong_path = "pred_correct/{}_pred_correct_positive.json".format(args.data)
-pred_wrong_parent_path = "pred_correct/"
-Path(pred_wrong_parent_path).mkdir(parents=True, exist_ok=True)
-
-# with open(pred_wrong_path, 'w') as file:
-#     file.write(json.dumps(pred_wrong_dict))
