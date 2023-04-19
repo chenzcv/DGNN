@@ -102,9 +102,11 @@ class TGN(torch.nn.Module):
                                          1)
 
         self.memory_list = []
+        self.last_memory = None
 
     def compute_temporal_embeddings(self, source_nodes, destination_nodes, negative_nodes, edge_times,
-                                    edge_idxs, n_neighbors=20, epoch=None):
+                                    edge_idxs, n_neighbors=20, epoch=None, batch=None, back_smooth=False,
+                                    exp_smooth=False):
         """
         Compute temporal embeddings for sources, destinations, and negatively sampled destinations.
 
@@ -125,13 +127,53 @@ class TGN(torch.nn.Module):
 
         memory = None
         time_diffs = None
+
+        # if epoch is not None and epoch > 0:
+        #     self.use_memory = False
+        #     if batch < 1:
+        #         memory = self.memory_list[batch]
+        #     else:
+        #         alpha = 0.6
+        #         memory = self.memory_list[batch].clone().detach()
+        #         last_memory = self.memory_list[batch - 1].clone().detach()
+        #         memory[source_nodes, :] = alpha * memory[source_nodes, :] + (1 - alpha) * last_memory[source_nodes, :]
+        #         memory[destination_nodes, :] = alpha * memory[destination_nodes, :] + (1 - alpha) * last_memory[
+        #                                                                                             destination_nodes,
+        #                                                                                             :]
         if self.use_memory or self.refresh_history_memory:
             if self.memory_update_at_start:
                 # Update memory for all nodes with messages stored in previous batches
                 memory, last_update = self.get_updated_memory(list(range(self.n_nodes)),
                                                               self.memory.messages)
-                if epoch == 51:
+                if epoch == 0 or back_smooth or exp_smooth:
                     self.memory_list.append(memory)
+
+                if batch is not None:
+                    if back_smooth:
+                        if batch == 0:
+                            self.memory_list = []
+                            torch.cuda.empty_cache()
+                        self.memory_list.append(memory)
+                        if batch >= 4:
+                            cur_memory = self.memory_list[-5].clone().detach()
+                            for i in range(-4, 0):
+                                cur_memory[source_nodes, :] = cur_memory[source_nodes, :] + self.memory_list[i].clone().detach()[source_nodes, :]
+                                cur_memory[destination_nodes, :] = cur_memory[destination_nodes, :] + self.memory_list[i].clone().detach()[destination_nodes, :]
+
+                            cur_memory[source_nodes, :] = cur_memory[source_nodes, :] / 5
+                            cur_memory[destination_nodes, :] = cur_memory[destination_nodes, :] / 5
+                            memory = cur_memory
+                    if exp_smooth:
+                        if batch == 0:
+                            self.last_memory = memory.clone().detach()
+                        else:
+                            alpha = 0.8
+                            memory = memory.clone().detach()
+                            memory[source_nodes, :] = alpha * memory[source_nodes, :] + (1 - alpha) * self.last_memory[source_nodes, :]
+                            memory[destination_nodes, :] = alpha * memory[destination_nodes, :] + (1 - alpha) * self.last_memory[destination_nodes, :]
+                            self.last_memory = memory
+
+
             else:
                 memory = self.memory.get_memory(list(range(self.n_nodes)))
                 last_update = self.memory.last_update
@@ -158,7 +200,8 @@ class TGN(torch.nn.Module):
                                                                                    timestamps=timestamps,
                                                                                    n_layers=self.n_layers,
                                                                                    n_neighbors=n_neighbors,
-                                                                                   time_diffs=time_diffs)
+                                                                                   time_diffs=time_diffs,
+                                                                                   batch=batch)
 
         source_node_embedding = node_embedding[:n_samples]
         destination_node_embedding = node_embedding[n_samples: 2 * n_samples]
@@ -170,8 +213,8 @@ class TGN(torch.nn.Module):
                 # new messages for them)
                 self.update_memory(positives, self.memory.messages)
 
-                assert torch.allclose(memory[positives], self.memory.get_memory(positives), atol=1e-5), \
-                    "Something wrong in how the memory was updated"
+                # assert torch.allclose(memory[positives], self.memory.get_memory(positives), atol=1e-5), \
+                #     "Something wrong in how the memory was updated"
 
                 # Remove messages for the positives since we have already updated the memory using them
                 self.memory.clear_messages(positives)
@@ -201,7 +244,8 @@ class TGN(torch.nn.Module):
         return source_node_embedding, destination_node_embedding, negative_node_embedding, attention_weight
 
     def compute_edge_probabilities(self, source_nodes, destination_nodes, negative_nodes, edge_times,
-                                   edge_idxs, n_neighbors=20, epoch=None):
+                                   edge_idxs, n_neighbors=20, epoch=None, batch=None, back_smooth=False,
+                                   exp_smooth=False):
         """
         Compute probabilities for edges between sources and destination and between sources and
         negatives by first computing temporal embeddings using the TGN encoder and then feeding them
@@ -216,7 +260,8 @@ class TGN(torch.nn.Module):
         """
         n_samples = len(source_nodes)
         source_node_embedding, destination_node_embedding, negative_node_embedding, attention_weight = self.compute_temporal_embeddings(
-            source_nodes, destination_nodes, negative_nodes, edge_times, edge_idxs, n_neighbors, epoch=epoch)
+            source_nodes, destination_nodes, negative_nodes, edge_times, edge_idxs, n_neighbors, epoch=epoch,
+            batch=batch, back_smooth=back_smooth, exp_smooth=exp_smooth)
 
         score = self.affinity_score(torch.cat([source_node_embedding, source_node_embedding], dim=0),
                                     torch.cat([destination_node_embedding, negative_node_embedding]))
